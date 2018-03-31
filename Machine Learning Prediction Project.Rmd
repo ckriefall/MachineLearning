@@ -1,0 +1,175 @@
+---
+title: "Machine Learning Prediction Project"
+author: "Charlie Kriefall"
+date: "March 29, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Project Overview and Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Behavior Labels
+
+A - exactly according to the specification
+
+B - throwing the elbows to the front
+
+C - lifting the dumbbell only halfway
+
+D - lowering the dumbbell only halfway
+
+E - throwing the hips to the front
+
+## Project Outputs
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+## Approach
+Data is analyzed and simplified narrowed to useful prediction columns
+Caret Package is used to run three distinctly different models
+Model is picked based on predicted accuracy
+Chosen model is applied to the provided test set
+
+# Load libraries and data
+NOTE: na logic used to load raw data was derived after some trivial pre-exploration of data, otherwise data is loaded as is.
+
+```{r echo=TRUE}
+library("caret", lib.loc="~/R/win-library/3.3")
+library(parallel)
+library(doParallel)
+set.seed(4321)
+
+if (!file.exists("pml-training.csv")) {
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile="pml-training.csv")
+}
+if (!file.exists("pml-testing.csv")) {
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile="pml-testing.csv")
+}
+train <- read.csv("pml-training.csv", na.strings=c("NA","#DIV/0!",""))
+test <- read.csv("pml-testing.csv", na.strings=c("NA","#DIV/0!",""))
+```
+
+## Narrow the training set to exclude various non-measurement columns
+Eliminate columns 1-7, which are names, timestamps and labels
+Eliminate columns that have near zero variance
+Eliminate columns with incomplete measurement data
+
+```{r echo=TRUE}
+# non-measures
+scrubbed_train <- train[,8:160]
+# near zero variance predictors and drop them if necessary, 118 columns left
+nzv <- nearZeroVar(scrubbed_train,saveMetrics=TRUE)
+scrubbed_train <- scrubbed_train[,nzv$nzv==FALSE]
+# incomplete data columns
+scrubbed_train <- scrubbed_train[, colSums(is.na(scrubbed_train)) == 0] 
+
+```
+
+## Subset the training data provided to test algorithms
+reserve 80% for training and 20% for validation set
+
+```{r echo=TRUE}
+inTrain <- createDataPartition(scrubbed_train$classe, p=0.80, list=F)
+subset_train <- scrubbed_train[inTrain, ]
+subset_validate <- scrubbed_train[-inTrain, ]
+```
+# Run three models using the train function from the Caret package
+lda - linear discriminant analysis, simplest of the three models, runs quickly
+gbm - generalized boosting model, more complex model, longer run times
+rf - random forest, very complex, very long run times
+
+NOTE: parallel processing used to increase the speed of calculations. 
+Thanks to Len for the instructions configuring parallel processing in class forum.
+
+```{r echo=TRUE}
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+fit_lda <- train(classe ~ ., data=subset_train, method="lda",trControl = fitControl)
+fit_gbm <- train(classe ~ ., data=subset_train, method="gbm",trControl = fitControl)
+x <- subset_train[,-53]
+y <- subset_train[,53]
+fit_rf <- train(x,y, method="rf",data=subset_train,trControl = fitControl)
+stopCluster(cluster)
+registerDoSEQ()
+
+```
+
+## Models are trained, now apply the models to the validation set to check accuracy
+Caret predict function is used to predict result for every row in validation set
+Mean of prediction is calculated for each model
+
+```{r echo=TRUE}
+predict_lda <- predict(fit_lda, subset_validate)
+predict_gbm <- predict(fit_gbm, subset_validate)
+predict_rf <- predict(fit_rf, subset_validate)
+
+mean_lda <- mean(predict_lda==subset_validate$classe)
+mean_gbm <- mean(predict_gbm==subset_validate$classe)
+mean_rf <- mean(predict_rf==subset_validate$classe)
+
+```
+
+# Model Comparison
+Mean of lda:  
+```{r echo=TRUE}
+mean_lda
+```
+Mean of gbm:  
+```{r echo=TRUE}
+mean_gbm
+```
+Mean of rf:  
+```{r echo=TRUE}
+mean_rf
+```
+
+Random Forest is the clear leader when measured by accuracy.
+
+## Confusion Matrices show deeper analysis of model comparison
+
+Confusion Matrix lda
+
+```{r echo=TRUE}
+confusionMatrix(predict_lda, subset_validate$classe)
+```
+
+Confusion Matrix gbm
+
+```{r echo=TRUE}
+confusionMatrix(predict_gbm, subset_validate$classe)
+```
+
+Confusion Matrix rf
+
+```{r echo=TRUE}
+confusionMatrix(predict_rf, subset_validate$classe)
+```
+
+
+## Apply Chosen Model, Random Forest to original test data
+20 rows of test data, predictions are listed for each row
+
+```{r echo=TRUE}
+predict_rf_test <- predict(fit_rf, test)
+predict_rf_test
+```
+
+## Conclusion
+
+Train data was divided into subsets, 80% train, 20% validation
+
+Three models in order of increasing complexity were trained using the training subset and subsequently run against the validation subset. 
+Models Trained: lda - linear discriminant analysis, gbm - generalized boosting model, rf - random forest,
+
+The most complex model took the longest to run and was also the most accurate prediction model. The clear winner in this test was Random Forest as shown by having the highest mean probability and by comparing the confusion matrices. 
